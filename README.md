@@ -229,17 +229,7 @@ docker-compose logs-fexport_hot_wallets
 
 -`CLICKHOUSE_URL`: ClickHouse connection URL
 
-### 3. Batch Ethereum Transactions (`batch_ethereum_transactions`)
-
-**Purpose**: Batch processing of historical Ethereum transactions
-
-**Features**:
-
-- Configurable batch sizes
-- BigQuery integration
-- Kafka publishing for downstream processing
-
-### 4. Update Final Table (`update_hot_wallet_labels`)
+### 3. Update Final Table (`update_hot_wallet_labels`)
 
 **Purpose**: Updates the final PostgreSQL table with wallet labels and categories
 
