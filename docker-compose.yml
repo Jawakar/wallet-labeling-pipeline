@@ -1,0 +1,233 @@
+version: '3.8'
+services:
+  kafka:
+    image: docker.io/bitnami/kafka:3.7
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode (no ZooKeeper)
+      - KAFKA_CFG_NODE_ID=0
+      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka:9094
+      - KAFKA_CFG_MESSAGE_MAX_BYTES=10485760           # 10MB
+      - KAFKA_CFG_REPLICA_FETCH_MAX_BYTES=10485760     # 10MB
+      - KAFKA_CFG_FETCH_MESSAGE_MAX_BYTES=10485760
+      # Listeners
+      - KAFKA_CFG_LISTENERS=EXTERNAL://:9092,INTERNAL://:9093,CONTROLLER://:9094
+      - KAFKA_CFG_ADVERTISED_LISTENERS=EXTERNAL://localhost:9092,INTERNAL://kafka:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=INTERNAL
+      # Internal Topics - No replication needed
+      - KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR=1
+      # JVM heap size tuning
+      - KAFKA_HEAP_OPTS=-Xmx2G -Xms2G
+      # Logging level
+      - KAFKA_LOG4J_LOGGERS=kafka.controller=WARN,kafka.producer.async.DefaultEventHandler=WARN,state.change.logger=WARN
+    volumes:
+      - ./data/kafka:/bitnami/kafka
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--bind", "0.0.0.0"]
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  
+  redis_insight:
+    image: redis/redisinsight:latest
+    container_name: redis_insight
+    ports:
+      - "15540:5540"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_SSL=false
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ./data/redis_insight:/db
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "18080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: kafka-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+    depends_on:
+      kafka:
+        condition: service_healthy
+  kafka-test:
+    build: ./test_kafka
+    container_name: kafka-test
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  spark-master:
+    image: bitnami/spark:3.5.0
+    hostname: spark-master
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "38080:8080"  # Expose the new Web UI port
+      - "7077:7077"  # Spark Master Port
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  spark-worker:
+    image: bitnami/spark:3.5.0
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+    deploy:
+      replicas: 1  # Number of worker replicas
+    depends_on:
+      - spark-master
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    volumes:
+      - ./data/clickhouse_data:/var/lib/clickhouse  # Persistent storage for ClickHouse data
+    ports:
+      - "18123:8123"  # HTTP interface
+      - "19000:9000"  # Native client interface
+      - "19009:9009"  # Interserver HTTP interface
+    environment:
+      - CLICKHOUSE_DB=analytics
+      - CLICKHOUSE_USER=${DB_USER}
+      - CLICKHOUSE_PASSWORD=${DB_PASSWORD}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - TZ=Asia/Tokyo
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:latest
+    restart: unless-stopped
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=analytics
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - ./data/postgres_data:/var/lib/postgresql/data
+    ports:
+      - '25432:5432'
+    healthcheck:
+      test: ["CMD", "pg_isready", "-d", "analytics", "-U", "${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgweb:
+    image: sosedoff/pgweb
+    restart: unless-stopped
+    ports:
+      - 8081:8081
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/analytics?sslmode=disable
+
+  bigquery-test:
+    build: ./test_bigquery_connection
+    container_name: bigquery-test
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+
+  extract_ethereum_transactions:
+    build: ./src/extract_ethereum_transactions
+    container_name: extract_ethereum_transactions
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_TOPIC=ethereum.mainnet.transactions
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./logs/extract_ethereum_transactions:/app/logs
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  export_hot_wallets:
+    build:
+      context: ./src/export_hot_wallets
+    image: export_hot_wallets:latest
+    container_name: export_hot_wallets
+    init: true
+    environment:
+      - KAFKA_BROKER=kafka:9093
+      - KAFKA_TOPIC=ethereum.mainnet.transactions
+      - CHECKPOINT_DIR=/opt/spark-app/checkpoints
+      - CLICKHOUSE_URL=http://${DB_USER}:${DB_PASSWORD}@clickhouse:8123/analytics
+    volumes:
+      - ./data/spark_checkpoints/hot_wallets:/opt/spark-app/checkpoints
+    depends_on:
+      kafka:
+        condition: service_healthy
+  update_hot_wallet_labels:
+    build:
+      context: ./src/update_final_table
+    container_name: update_hot_wallet_labels
+    environment:
+      - POSTGRES_DATABASE_URL=postgresql://:${DB_PASSWORD}@postgres:5432/analytics
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=${DB_USER}
+      - CLICKHOUSE_PASSWORD=${DB_PASSWORD}
+      - CLICKHOUSE_DATABASE=analytics
+      - CLICKHOUSE_RECEIVE_TIMEOUT=900000
+      - CLICKHOUSE_SEND_TIMEOUT=900000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  
