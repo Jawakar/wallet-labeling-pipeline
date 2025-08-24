@@ -1,0 +1,5 @@
+pandas
+psycopg2-binary
+clickhouse-driver
+SQLAlchemy
+clickhouse-sqlalchemy

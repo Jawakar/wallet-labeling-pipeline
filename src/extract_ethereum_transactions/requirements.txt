@@ -1,0 +1,8 @@
+numpy>=1.24.0
+pandas>=1.5.3
+google-cloud-bigquery==3.10.0
+db-dtypes==1.4.3
+ruff==0.12.9
+kafka-python
+faust
+aioredis

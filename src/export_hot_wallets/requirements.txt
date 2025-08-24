@@ -1,0 +1,4 @@
+py4j
+delta-spark
+pyspark==3.5.0
+clickhouse-connect
