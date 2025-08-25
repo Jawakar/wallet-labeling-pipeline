@@ -33,11 +33,19 @@ I have engineered a scalable, real-time architecture and implemented a core segm
 * Stream Processing: The jobs process data in near real-time with a 10-minute tumbling window and a 5-minute watermark. This allows for handling late-arriving data gracefully while enabling complex joins and aggregations across multiple data streams (e.g., joining transactions with token transfers).
 * State Management: Spark's checkpointing mechanism is used to maintain state (e.g., running counts, unique address sets). Initially configured with RocksDB for local state storage, this can be seamlessly upgraded to a distributed filesystem like S3/HDFS for enhanced resilience in a larger cluster environment.
 
+## 3. Storage Layer: Optimized for Analytics and Evolution
+
+* **Analytical Datastore** : The output of the Spark jobs is written to a **ClickHouse** database, specifically into a single table named `labels_wide_table`. ClickHouse is chosen for its exceptional performance in analytical and time-series queries.
+* **Evolving Schema** : This table is designed with a dynamic, wide-column format. As new labeling jobs are created, new columns can be added without downtime, making the architecture highly adaptable. An `inserted_at` column ensures that only the latest data is considered, handling potential re-processing scenarios.
+* **Relational End-Store** : A final, clean representation of the labels is stored in a **PostgreSQL** database. This table is optimized for transactional lookups from the API and has a simple schema: `[address, label, category, last_updated]`. An `UPSERT` operation on the address ensures that the table always holds the most current label for each address.
+
 ## **4\. Orchestration and Validation Layer: Ensuring Data Quality and Reliability**
 
 * Workflow Orchestration: Apache Airflow (deployed via Google Cloud Composer, AWS MWAA, or on a dedicated server) manages the final step of the data pipeline.
+
   * Label-Based DAGs: Separate DAGs are created for each label. These DAGs are responsible for reading aggregated, labeled data from ClickHouse, applying final business logic or thresholds, and upserting the results into the PostgreSQL table.
 * Data Validation: Before being served, the labeled addresses are cross-referenced with trusted public sources like the Etherscan or Nansen APIs.
+
   * Feedback Loop: Any discrepancies or false positives are logged to a separate audit table. This creates a valuable feedback loop for data scientists and engineers to continuously refine and improve the labeling algorithms.
 
 ## **5\. Consumption & Alerting Layer: Delivering Actionable Insights**
@@ -105,7 +113,7 @@ GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 
 # Clone the repository
 
-git clone <repository-url>
+git clone https://github.com/Jawakar/wallet-labeling-pipeline.git
 
 cd nansen_challenge
 
@@ -133,7 +141,7 @@ cp /path/to/your/service-account-key.json./credentials.json
 
 # Start core infrastructure (Kafka, Redis, ClickHouse, PostgreSQL)
 
-docker-compose up-dkafkaredisclickhousepostgres
+docker-compose up -d kafka redis clickhouse postgres
 
 
 # Verify services are healthy
@@ -148,12 +156,12 @@ docker-compose ps
 
 # Start all processing services
 
-docker-compose up-dextract_ethereum_transactionsexport_hot_walletsupdate_hot_wallet_labels
+docker-compose up -d extract_ethereum_transactions export_hot_wallets update_hot_wallet_labels
 
 
 # Or start individual services as needed
 
-docker-compose up-dextract_ethereum_transactions
+docker-compose up -d extract_ethereum_transactions
 
 ```
 
@@ -163,9 +171,9 @@ docker-compose up-dextract_ethereum_transactions
 
 # View logs
 
-docker-compose logs-fextract_ethereum_transactions
+docker-compose logs -f extract_ethereum_transactions
 
-docker-compose logs-fexport_hot_wallets
+docker-compose logs -f export_hot_wallets
 
 
 # Access UIs
@@ -314,24 +322,14 @@ addressVARCHAR(42) PRIMARY KEY,
 
 ```bash
 
-# Test Kafka connectivity
-
-docker-compose upkafka-test
-
-
-# Test BigQuery connectivity  
-
-docker-compose upbigquery-test
-
-
 # Run only extraction service
 
-docker-compose upextract_ethereum_transactions
+docker-compose up extract_ethereum_transactions
 
 
 # Run only hot wallet detection
 
-docker-compose upexport_hot_wallets
+docker-compose up export_hot_wallets
 
 ```
 
@@ -377,7 +375,6 @@ For production deployment:
 - Set `KAFKA_TOPIC_REPLICATION_FACTOR=3` for fault tolerance
 - Increase Spark worker replicas in docker-compose.yml
 - Configure appropriate memory limits for each service
-- Use external managed services (e.g., Confluent Cloud, AWS RDS)
 
 ## Monitoring & Observability
 
